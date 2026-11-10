@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     kotlin("plugin.compose")
     kotlin("plugin.serialization")
+    id("io.github.takahirom.roborazzi")
 }
 
 val keyProps = Properties().apply {
@@ -50,7 +51,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { resources.excludes += setOf("META-INF/versions/**", "META-INF/*.version", "/META-INF/{AL2.0,LGPL2.1}") }
-    testOptions { unitTests.isIncludeAndroidResources = true }
+    testOptions { unitTests { isIncludeAndroidResources = true; all { it.systemProperty("robolectric.pixelCopyRenderMode", "hardware") } } }
 }
 
 dependencies {
@@ -74,4 +75,11 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation(kotlin("test"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.78.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.78.0")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+
+roborazzi { outputDir.set(layout.buildDirectory.dir("outputs/roborazzi")) }

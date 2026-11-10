@@ -63,16 +63,21 @@ fun StanceApp(vm: DeckViewModel) {
 
 // ---- home ---------------------------------------------------------------------
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(vm: DeckViewModel) {
     val pcs by vm.pcs.collectAsStateWithLifecycle()
+    HomeContent(pcs, { vm.go(Screen.Pair) }, { vm.go(Screen.Pc(it)) }, { vm.forget(it) })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeContent(pcs: List<PcRecord>, onAdd: () -> Unit, onOpen: (String) -> Unit, onForget: (String) -> Unit) {
     var confirmForget by remember { mutableStateOf<PcRecord?>(null) }
     Scaffold(
         topBar = { TopAppBar(title = { Text("Stance Deck") }) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { vm.go(Screen.Pair) },
+                onClick = { onAdd() },
                 icon = { Icon(Icons.Default.QrCodeScanner, null) },
                 text = { Text("Add PC") },
                 modifier = Modifier.testTag("add-pc"),
@@ -96,7 +101,7 @@ fun HomeScreen(vm: DeckViewModel) {
         } else {
             LazyColumn(Modifier.padding(pad), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(pcs, key = { it.pcPublic }) { pc ->
-                    Card(onClick = { vm.go(Screen.Pc(pc.pcPublic)) }, Modifier.fillMaxWidth().testTag("pc-card")) {
+                    Card(onClick = { onOpen(pc.pcPublic) }, Modifier.fillMaxWidth().testTag("pc-card")) {
                         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Computer, null, Modifier.size(32.dp))
                             Spacer(Modifier.width(16.dp))
@@ -119,7 +124,7 @@ fun HomeScreen(vm: DeckViewModel) {
             onDismissRequest = { confirmForget = null },
             title = { Text("Forget ${pc.name}?") },
             text = { Text("This phone stays listed on the PC until you run  stance deck unpair.") },
-            confirmButton = { TextButton(onClick = { vm.forget(pc.pcPublic); confirmForget = null }) { Text("Forget") } },
+            confirmButton = { TextButton(onClick = { onForget(pc.pcPublic); confirmForget = null }) { Text("Forget") } },
             dismissButton = { TextButton(onClick = { confirmForget = null }) { Text("Cancel") } },
         )
     }
@@ -127,7 +132,6 @@ fun HomeScreen(vm: DeckViewModel) {
 
 // ---- pairing --------------------------------------------------------------------
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairScreen(vm: DeckViewModel) {
     val ctx = LocalContext.current
@@ -142,26 +146,43 @@ fun PairScreen(vm: DeckViewModel) {
     LaunchedEffect(Unit) { if (!granted) launcher.launch(Manifest.permission.CAMERA) }
     val request by vm.pair.collectAsStateWithLifecycle()
     val scanError by vm.scanError.collectAsStateWithLifecycle()
+    LaunchedEffect(scanError) { if (scanError != null) { delay(4000); vm.clearScanError() } }
+    PairContent(
+        granted = granted, request = request, scanError = scanError,
+        onAllow = { launcher.launch(Manifest.permission.CAMERA) },
+        onCode = { vm.codeFound(it) },
+        onBack = { vm.go(Screen.Home) },
+        onConfirm = { vm.confirmPair() },
+        onCancel = { vm.cancelPair() },
+        scanner = { m -> QrScanner(m) { vm.codeFound(it) } },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PairContent(
+    granted: Boolean, request: PairRequest?, scanError: String?,
+    onAllow: () -> Unit, onCode: (String) -> Unit, onBack: () -> Unit, onConfirm: () -> Unit, onCancel: () -> Unit,
+    scanner: @Composable (Modifier) -> Unit,
+) {
     var pasted by remember { mutableStateOf("") }
 
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("Pair with a PC") },
-            navigationIcon = { IconButton(onClick = { vm.go(Screen.Home) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+            navigationIcon = { IconButton(onClick = { onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
         )
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Scan the code from  stance deck pair  or the panel's Phone card. It is valid for two minutes.", style = MaterialTheme.typography.bodyMedium)
             if (granted) {
-                QrScanner(
-                    Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp)).testTag("scanner"),
-                ) { vm.codeFound(it) }
+                scanner(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp)).testTag("scanner"))
             } else {
                 Card(Modifier.fillMaxWidth().weight(1f)) {
                     Column(Modifier.padding(16.dp).fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("The camera is only used to read the pairing code.")
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = { launcher.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") }
+                        Button(onClick = { onAllow() }) { Text("Allow camera") }
                     }
                 }
             }
@@ -172,7 +193,7 @@ fun PairScreen(vm: DeckViewModel) {
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("paste"),
                 trailingIcon = {
-                    IconButton(onClick = { vm.codeFound(pasted) }, enabled = pasted.isNotBlank()) { Icon(Icons.Default.Check, "Use code") }
+                    IconButton(onClick = { onCode(pasted) }, enabled = pasted.isNotBlank()) { Icon(Icons.Default.Check, "Use code") }
                 },
             )
             scanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -181,7 +202,7 @@ fun PairScreen(vm: DeckViewModel) {
 
     request?.let { r ->
         AlertDialog(
-            onDismissRequest = { if (!r.working) vm.cancelPair() },
+            onDismissRequest = { if (!r.working) onCancel() },
             title = { Text("Pair with ${r.qr.name}?") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -196,11 +217,10 @@ fun PairScreen(vm: DeckViewModel) {
                     r.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             },
-            confirmButton = { Button(onClick = { vm.confirmPair() }, enabled = !r.working, modifier = Modifier.testTag("pair-confirm")) { Text("Pair") } },
-            dismissButton = { TextButton(onClick = { vm.cancelPair() }, enabled = !r.working) { Text("Cancel") } },
+            confirmButton = { Button(onClick = { onConfirm() }, enabled = !r.working, modifier = Modifier.testTag("pair-confirm")) { Text("Pair") } },
+            dismissButton = { TextButton(onClick = { onCancel() }, enabled = !r.working) { Text("Cancel") } },
         )
     }
-    LaunchedEffect(scanError) { if (scanError != null) { delay(4000); vm.clearScanError() } }
 }
 
 // ---- deck -----------------------------------------------------------------------
@@ -220,7 +240,6 @@ private fun iconFor(name: String?): ImageVector = when (name) {
     else -> Icons.Default.TouchApp
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PcScreen(vm: DeckViewModel, pcPublic: String) {
     val pcs by vm.pcs.collectAsStateWithLifecycle()
@@ -229,26 +248,43 @@ fun PcScreen(vm: DeckViewModel, pcPublic: String) {
     val snack = remember { SnackbarHostState() }
     val c = conn
     LaunchedEffect(c) { c?.events?.collect { snack.showSnackbar(it, duration = SnackbarDuration.Short) } }
+    val view = c?.view?.collectAsStateWithLifecycle()?.value
+    PcContent(
+        name = pc?.name ?: "PC", view = view, snack = snack,
+        onBack = { vm.go(Screen.Home) },
+        onRetry = { c?.retryNow() },
+        onForget = { pc?.let { vm.forget(it.pcPublic) } },
+        onPress = { c?.press(it) },
+        onKeep = { c?.confirm() },
+        onRevert = { c?.revert() },
+    )
+}
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PcContent(
+    name: String, view: DeckView?, snack: SnackbarHostState,
+    onBack: () -> Unit, onRetry: () -> Unit, onForget: () -> Unit,
+    onPress: (String) -> Unit, onKeep: () -> Unit, onRevert: () -> Unit,
+) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(pc?.name ?: "PC", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = { IconButton(onClick = { vm.go(Screen.Home) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                title = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             )
         },
         snackbarHost = { SnackbarHost(snack) },
     ) { pad ->
-        if (c == null) {
+        if (view == null) {
             Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             return@Scaffold
         }
-        val view by c.view.collectAsStateWithLifecycle()
         Column(Modifier.padding(pad).fillMaxSize()) {
-            LinkBar(view.link, onRetry = { c.retryNow() }, onForget = { pc?.let { vm.forget(it.pcPublic) } })
+            LinkBar(view.link, onRetry = onRetry, onForget = onForget)
             val pending = view.state?.pending
             if (pending != null && view.link is Link.Connected) {
-                PendingBanner(pending, view.stateAtMs, onKeep = { c.confirm() }, onRevert = { c.revert() })
+                PendingBanner(pending, view.stateAtMs, onKeep = onKeep, onRevert = onRevert)
             }
             val buttons = view.hello?.buttons.orEmpty()
             if (buttons.isEmpty()) {
@@ -263,7 +299,7 @@ fun PcScreen(vm: DeckViewModel, pcPublic: String) {
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(buttons, key = { it.id }) { b ->
-                        DeckButton(b, busy = b.id in view.busy, enabled = view.link is Link.Connected && b.id !in view.busy) { c.press(b.id) }
+                        DeckButton(b, busy = b.id in view.busy, enabled = view.link is Link.Connected && b.id !in view.busy) { onPress(b.id) }
                     }
                 }
             }
