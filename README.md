@@ -36,3 +36,10 @@ stance deck serve --loopback --port 47800
 adb reverse tcp:47800 tcp:47800
 ```
 then pair with a code whose host is `127.0.0.1`.
+
+## Tests
+
+- `./gradlew :core:test`: Noise vectors, QR parsing, live interop (see above).
+- `./gradlew :app:testDebugUnitTest`: reconnect/back-off of `PcConnection` against an in-process fake PC, and Robolectric screenshot smoke tests.
+- `./gradlew :app:recordRoborazziDebug`: writes a PNG of every screen state to `app/build/outputs/roborazzi/` (no GPU or emulator needed).
+- `tests/e2e-android.sh [stance]` (repo root, optional): emulator + nested Hyprland + `stance deck serve`; pairs the app, presses a layout button, checks the Keep / Revert banner and the automatic revert. Skips when adb, the emulator, an AVD (`STANCE_AVD`, default `stance34`, device pixel_6) or the debug APK are missing.

@@ -25,7 +25,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,7 +97,11 @@ fun HomeContent(pcs: List<PcRecord>, onAdd: () -> Unit, onOpen: (String) -> Unit
                 Text("No PC yet", style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "On your PC run  stance deck pair  (or open the Phone card in the bar panel), then scan the code.",
+                    buildAnnotatedString {
+                        append("On your PC run ")
+                        withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append("stance deck pair") }
+                        append(" (or open the Phone card in the bar panel), then scan the code.")
+                    },
                     textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -123,7 +130,7 @@ fun HomeContent(pcs: List<PcRecord>, onAdd: () -> Unit, onOpen: (String) -> Unit
         AlertDialog(
             onDismissRequest = { confirmForget = null },
             title = { Text("Forget ${pc.name}?") },
-            text = { Text("This phone stays listed on the PC until you run  stance deck unpair.") },
+            text = { Text("This phone stays listed on the PC until you run \"stance deck unpair\".") },
             confirmButton = { TextButton(onClick = { onForget(pc.pcPublic); confirmForget = null }) { Text("Forget") } },
             dismissButton = { TextButton(onClick = { confirmForget = null }) { Text("Cancel") } },
         )
@@ -174,7 +181,14 @@ fun PairContent(
         )
     }) { pad ->
         Column(Modifier.padding(pad).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Scan the code from  stance deck pair  or the panel's Phone card. It is valid for two minutes.", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                buildAnnotatedString {
+                    append("Scan the code from ")
+                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append("stance deck pair") }
+                    append(" or the panel's Phone card. It is valid for two minutes.")
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
             if (granted) {
                 scanner(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp)).testTag("scanner"))
             } else {
