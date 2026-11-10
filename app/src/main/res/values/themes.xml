@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.Stance" parent="android:Theme.Material.NoActionBar" />
+</resources>
