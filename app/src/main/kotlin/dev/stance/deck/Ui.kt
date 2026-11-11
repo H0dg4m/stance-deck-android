@@ -1,6 +1,8 @@
 package dev.stance.deck
 
 import android.Manifest
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
@@ -37,6 +39,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.stance.deck.core.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun StanceTheme(content: @Composable () -> Unit) {
@@ -69,12 +72,14 @@ fun StanceApp(vm: DeckViewModel) {
 @Composable
 fun HomeScreen(vm: DeckViewModel) {
     val pcs by vm.pcs.collectAsStateWithLifecycle()
-    HomeContent(pcs, { vm.go(Screen.Pair) }, { vm.go(Screen.Pc(it)) }, { vm.forget(it) })
+    val share by vm.share.collectAsStateWithLifecycle()
+    val hint = share?.let { if (it is Share.Text) "Choose a PC to send the shared text to" else "Choose a PC to send the shared file to" }
+    HomeContent(pcs, { vm.go(Screen.Pair) }, { vm.go(Screen.Pc(it)) }, { vm.forget(it) }, hint)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeContent(pcs: List<PcRecord>, onAdd: () -> Unit, onOpen: (String) -> Unit, onForget: (String) -> Unit) {
+fun HomeContent(pcs: List<PcRecord>, onAdd: () -> Unit, onOpen: (String) -> Unit, onForget: (String) -> Unit, shareHint: String? = null) {
     var confirmForget by remember { mutableStateOf<PcRecord?>(null) }
     Scaffold(
         topBar = { TopAppBar(title = { Text("Stance Deck") }) },
@@ -107,6 +112,11 @@ fun HomeContent(pcs: List<PcRecord>, onAdd: () -> Unit, onOpen: (String) -> Unit
             }
         } else {
             LazyColumn(Modifier.padding(pad), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (shareHint != null) item {
+                    Card(Modifier.fillMaxWidth().testTag("share-hint"), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                        Text(shareHint, Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
+                    }
+                }
                 items(pcs, key = { it.pcPublic }) { pc ->
                     Card(onClick = { onOpen(pc.pcPublic) }, Modifier.fillMaxWidth().testTag("pc-card")) {
                         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -259,10 +269,15 @@ fun PcScreen(vm: DeckViewModel, pcPublic: String) {
     val pcs by vm.pcs.collectAsStateWithLifecycle()
     val pc = pcs.firstOrNull { it.pcPublic == pcPublic }
     val conn by vm.connection.collectAsStateWithLifecycle()
+    val share by vm.share.collectAsStateWithLifecycle()
     val snack = remember { SnackbarHostState() }
+    val ctx = LocalContext.current
     val c = conn
     LaunchedEffect(c) { c?.events?.collect { snack.showSnackbar(it, duration = SnackbarDuration.Short) } }
     val view = c?.view?.collectAsStateWithLifecycle()?.value
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) c?.let { conn -> sourceFromUri(ctx, uri)?.let(conn::sendFile) }
+    }
     PcContent(
         name = pc?.name ?: "PC", view = view, snack = snack,
         onBack = { vm.go(Screen.Home) },
@@ -271,8 +286,33 @@ fun PcScreen(vm: DeckViewModel, pcPublic: String) {
         onPress = { c?.press(it) },
         onKeep = { c?.confirm() },
         onRevert = { c?.revert() },
+        transfer = TransferUi(
+            // The clipboard is read only here, on the button press.
+            onSendClip = {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+                c?.sendClip(text)
+            },
+            onSendFile = { picker.launch(arrayOf("*/*")) },
+            onAnswer = { sid, ok -> c?.answer(sid, ok) },
+            onDismissOut = { c?.dismissOut() },
+            share = share,
+            onShareSend = { c?.let { vm.sendShare(it) } },
+            onShareDismiss = { vm.clearShare() },
+        ),
     )
 }
+
+/** Transfer buttons and prompts of the PC screen; defaults keep previews and tests simple. */
+data class TransferUi(
+    val onSendClip: () -> Unit = {},
+    val onSendFile: () -> Unit = {},
+    val onAnswer: (Long, Boolean) -> Unit = { _, _ -> },
+    val onDismissOut: () -> Unit = {},
+    val share: Share? = null,
+    val onShareSend: () -> Unit = {},
+    val onShareDismiss: () -> Unit = {},
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -280,6 +320,7 @@ fun PcContent(
     name: String, view: DeckView?, snack: SnackbarHostState,
     onBack: () -> Unit, onRetry: () -> Unit, onForget: () -> Unit,
     onPress: (String) -> Unit, onKeep: () -> Unit, onRevert: () -> Unit,
+    transfer: TransferUi = TransferUi(),
 ) {
     Scaffold(
         topBar = {
@@ -300,6 +341,7 @@ fun PcContent(
             if (pending != null && view.link is Link.Connected) {
                 PendingBanner(pending, view.stateAtMs, onKeep = onKeep, onRevert = onRevert)
             }
+            if (view.link is Link.Connected && (view.hello?.proto ?: 1) >= 2) TransferBar(view, transfer)
             val buttons = view.hello?.buttons.orEmpty()
             if (buttons.isEmpty()) {
                 if (view.link is Link.Connected) {
@@ -314,6 +356,74 @@ fun PcContent(
                 ) {
                     items(buttons, key = { it.id }) { b ->
                         DeckButton(b, busy = b.id in view.busy, enabled = view.link is Link.Connected && b.id !in view.busy) { onPress(b.id) }
+                    }
+                }
+            }
+        }
+    }
+    view?.asks?.firstOrNull()?.let { ask ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Receive a file from $name?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(ask.name, fontFamily = FontFamily.Monospace, modifier = Modifier.testTag("ask-name"))
+                    Text(humanSize(ask.size))
+                    Text("It is saved to Downloads/stance and never opened. Declined automatically after 60 seconds.", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { Button(onClick = { transfer.onAnswer(ask.sid, true) }, modifier = Modifier.testTag("ask-accept")) { Text("Accept") } },
+            dismissButton = { TextButton(onClick = { transfer.onAnswer(ask.sid, false) }, modifier = Modifier.testTag("ask-decline")) { Text("Decline") } },
+        )
+    }
+}
+
+@Composable
+private fun TransferBar(view: DeckView, t: TransferUi) {
+    Column(Modifier.fillMaxWidth().padding(16.dp, 12.dp, 16.dp, 0.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = t.onSendClip, modifier = Modifier.weight(1f).testTag("send-clip")) {
+                Icon(Icons.Default.ContentPaste, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Send clipboard", maxLines = 1)
+            }
+            OutlinedButton(onClick = t.onSendFile, enabled = view.out?.active != true, modifier = Modifier.weight(1f).testTag("send-file")) {
+                Icon(Icons.Default.UploadFile, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Send file", maxLines = 1)
+            }
+        }
+        t.share?.let { sh ->
+            Card(Modifier.fillMaxWidth().testTag("share"), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Shared with Stance Deck", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        when (sh) { is Share.Text -> "Text: " + cleanText(sh.text, 60); is Share.File -> cleanFileName(sh.src.name) + " (" + humanSize(sh.src.size) + ")" },
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = t.onShareSend, modifier = Modifier.weight(1f).testTag("share-send")) { Text(if (sh is Share.Text) "Send to PC clipboard" else "Send file") }
+                        TextButton(onClick = t.onShareDismiss) { Text("Dismiss") }
+                    }
+                }
+            }
+        }
+        view.out?.let { o ->
+            Card(Modifier.fillMaxWidth().testTag("out")) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(o.name + "  ·  " + humanSize(o.size), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
+                    when (o.phase) {
+                        Phase.PREPARING -> { Text("Preparing…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                        Phase.WAITING -> { Text("Waiting for the PC to accept (answer on the PC)…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                        Phase.SENDING -> {
+                            Text(if (o.sent >= o.size) "Checking on the PC…" else "Sending " + humanSize(o.sent) + " of " + humanSize(o.size))
+                            LinearProgressIndicator(progress = { (o.sent.toFloat() / o.size).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                        }
+                        Phase.DONE, Phase.FAILED -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    o.message ?: if (o.phase == Phase.DONE) "Sent" else "Failed", Modifier.weight(1f),
+                                    color = if (o.phase == Phase.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                )
+                                TextButton(onClick = t.onDismissOut) { Text("Dismiss") }
+                            }
+                        }
                     }
                 }
             }

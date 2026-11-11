@@ -1,6 +1,8 @@
 package dev.stance.deck
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,11 +21,47 @@ sealed interface Screen {
     data class Pc(val pcPublic: String) : Screen
 }
 
+/** Something shared to this app from another app (ACTION_SEND), waiting for a PC to send it to. */
+sealed interface Share {
+    data class Text(val text: String) : Share
+    data class File(val src: OutSource) : Share
+}
+
 /** A scanned or pasted code waiting for the user to compare fingerprints. */
 data class PairRequest(val qr: QrPayload, val working: Boolean = false, val error: String? = null)
 
 class DeckViewModel(app: Application) : AndroidViewModel(app) {
     private val store = Store(app)
+    private val host = AndroidHost(app).also { it.sweep() }
+
+    private val _share = MutableStateFlow<Share?>(null)
+    val share: StateFlow<Share?> = _share.asStateFlow()
+
+    /** An ACTION_SEND intent: remember what was shared and open the PC (or the PC list). */
+    fun shareIn(intent: Intent) {
+        if (intent.action != Intent.ACTION_SEND) return
+        val ctx = getApplication<Application>()
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        @Suppress("DEPRECATION")
+        val uri = if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+        _share.value = when {
+            uri != null -> sourceFromUri(ctx, uri)?.let { Share.File(it) }
+            !text.isNullOrBlank() -> Share.Text(text)
+            else -> null
+        }
+        if (_share.value != null) go(if (_pcs.value.size == 1) Screen.Pc(_pcs.value[0].pcPublic) else Screen.Home)
+    }
+
+    fun clearShare() { _share.value = null }
+
+    fun sendShare(c: PcConnection) {
+        when (val sh = _share.value) {
+            is Share.Text -> c.sendClip(sh.text)
+            is Share.File -> c.sendFile(sh.src)
+            null -> {}
+        }
+        _share.value = null
+    }
 
     private val _pcs = MutableStateFlow(store.list())
     val pcs: StateFlow<List<PcRecord>> = _pcs.asStateFlow()
@@ -63,7 +101,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (cur != null && currentPc == want.pcPublic) { cur.start(); return }
         cur?.stop()
-        val c = PcConnection(viewModelScope, want, store.ownKey(want)) { hosts, port -> updateHosts(want.pcPublic, hosts, port) }
+        val c = PcConnection(viewModelScope, want, store.ownKey(want), host) { hosts, port -> updateHosts(want.pcPublic, hosts, port) }
         currentPc = want.pcPublic
         _connection.value = c
         c.start()

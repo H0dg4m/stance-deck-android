@@ -1,5 +1,6 @@
 package dev.stance.deck
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -23,5 +24,11 @@ class MainActivity : ComponentActivity() {
             }
         })
         setContent { StanceApp(vm) }
+        if (savedInstanceState == null) vm.shareIn(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        vm.shareIn(intent)
     }
 }

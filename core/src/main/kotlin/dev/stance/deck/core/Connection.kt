@@ -1,6 +1,5 @@
 package dev.stance.deck.core
 
-import java.io.DataInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -10,7 +9,6 @@ import java.net.SocketTimeoutException
 
 /** Byte pipe with u16 big-endian length framing; also usable over in-memory streams in tests. */
 class Framing(private val input: InputStream, private val output: OutputStream) {
-    private val din = DataInputStream(input)
 
     fun write(data: ByteArray) {
         if (data.isEmpty() || data.size > 65535) throw DeckException("frame size out of bounds")
@@ -24,11 +22,32 @@ class Framing(private val input: InputStream, private val output: OutputStream) 
         try { output.write(b.toInt()); output.flush() } catch (e: IOException) { throw DeckException(e.message ?: "write failed", DeckException.Kind.IO) }
     }
 
+    // A read timeout may hit in the middle of a frame; what arrived so far is kept for the next call.
+    private val hdr = ByteArray(2)
+    private var hdrN = 0
+    private var body: ByteArray? = null
+    private var bodyN = 0
+
     fun read(max: Int): ByteArray {
         try {
-            val len = din.readUnsignedShort()
-            if (len == 0 || len > max) throw DeckException("frame size out of bounds")
-            return ByteArray(len).also { din.readFully(it) }
+            while (hdrN < 2) {
+                val n = input.read(hdr, hdrN, 2 - hdrN)
+                if (n < 0) throw java.io.EOFException()
+                hdrN += n
+            }
+            if (body == null) {
+                val len = ((hdr[0].toInt() and 0xFF) shl 8) or (hdr[1].toInt() and 0xFF)
+                if (len == 0 || len > max) throw DeckException("frame size out of bounds")
+                body = ByteArray(len); bodyN = 0
+            }
+            val b = body!!
+            while (bodyN < b.size) {
+                val n = input.read(b, bodyN, b.size - bodyN)
+                if (n < 0) throw java.io.EOFException()
+                bodyN += n
+            }
+            hdrN = 0; body = null
+            return b
         } catch (e: java.io.EOFException) {
             throw DeckException("connection closed", DeckException.Kind.CLOSED)
         } catch (e: SocketTimeoutException) {

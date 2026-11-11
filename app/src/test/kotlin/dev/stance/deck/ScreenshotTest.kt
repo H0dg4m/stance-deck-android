@@ -82,4 +82,21 @@ class ScreenshotTest {
     @Test fun pc_connecting() = shot("pc-connecting") {
         PcContent("H0dZ desktop", DeckView(Link.Connecting(1)), SnackbarHostState(), {}, {}, {}, {}, {}, {})
     }
+
+    private val hello2 = hello.copy(proto = 2, caps = listOf("clip.text", "file.push", "file.pull"))
+
+    @Test fun pc_transfer_progress() = shot("pc-transfer-progress") {
+        val v = DeckView(Link.Connected, hello2, hello.state, now(), caps = hello2.caps, out = OutState("holiday-photos.zip", 48_000_000, Phase.SENDING, 17_500_000))
+        PcContent("H0dZ desktop", v, SnackbarHostState(), {}, {}, {}, {}, {}, {})
+    }
+
+    @Test fun pc_transfer_ask() = shot("pc-transfer-ask") {
+        val v = DeckView(Link.Connected, hello2, hello.state, now(), caps = hello2.caps, asks = listOf(FileAsk(2, "report.pdf", 1_300_000)))
+        PcContent("H0dZ desktop", v, SnackbarHostState(), {}, {}, {}, {}, {}, {})
+    }
+
+    @Test fun pc_transfer_declined_and_share() = shot("pc-transfer-declined") {
+        val v = DeckView(Link.Connected, hello2, hello.state, now(), caps = hello2.caps, out = OutState("a.bin", 100, Phase.FAILED, 0, "Declined on the PC"))
+        PcContent("H0dZ desktop", v, SnackbarHostState(), {}, {}, {}, {}, {}, {}, TransferUi(share = Share.Text("https://example.org/some/long/link")))
+    }
 }

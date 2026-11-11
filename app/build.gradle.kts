@@ -21,8 +21,8 @@ android {
         applicationId = "dev.stance.deck"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.2.0"
+        versionCode = 2
+        versionName = "0.3.0"
     }
 
     signingConfigs {
@@ -51,7 +51,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     packaging { resources.excludes += setOf("META-INF/versions/**", "META-INF/*.version", "/META-INF/{AL2.0,LGPL2.1}") }
-    testOptions { unitTests { isIncludeAndroidResources = true; all { it.systemProperty("robolectric.pixelCopyRenderMode", "hardware") } } }
+    testOptions { unitTests { isIncludeAndroidResources = true; all {
+        it.systemProperty("robolectric.pixelCopyRenderMode", "hardware")
+        // Live interop tests need a built `stance` binary; see LiveTransferTest.
+        it.systemProperty("stance.binary", System.getProperty("stance.binary") ?: System.getenv("STANCE_BIN") ?: "")
+    } } }
 }
 
 dependencies {
