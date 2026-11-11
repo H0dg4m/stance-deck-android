@@ -131,6 +131,33 @@ class LiveInteropTest {
     }
 
     @Test
+    fun v2CapsAndDeclinedOffer() {
+        withServer { env ->
+        val qr = parseQr(payload(env))
+        val phone = KeyPair.generate()
+        Deck.pair(qr, phone, "Kotlin v2 phone").close()
+        Deck.connect("127.0.0.1", env.port, phone, qr.pcPublic).use { s ->
+            val h = hello(s)
+            assertTrue(h.proto >= 2)
+            s.send(ClientMsg.Caps(PROTO, emptyList()))
+            s.send(ClientMsg.Stream(StreamMsg.Offer(1, "clip.text", 5, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")))
+            var caps: ServerMsg.Caps? = null
+            var decline: StreamMsg.Decline? = null
+            val end = System.currentTimeMillis() + 5000
+            while (decline == null && System.currentTimeMillis() < end) {
+                when (val m = s.recv(500)) {
+                    is ServerMsg.Caps -> caps = m
+                    is ServerMsg.Stream -> decline = m.msg as? StreamMsg.Decline
+                    else -> {}
+                }
+            }
+            assertEquals(emptyList(), caps?.caps)
+            assertEquals(StreamMsg.Decline(1, "unsupported"), decline)
+        }
+        }
+    }
+
+    @Test
     fun wrongPcKeyIsRejectedByThePhone() {
         withServer { env ->
         val qr = parseQr(payload(env))

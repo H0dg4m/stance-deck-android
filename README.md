@@ -7,6 +7,8 @@ Phone side of the stance deck: scan the PC's pairing QR, then press the buttons
 from `~/.config/stance/deck.toml`. Wi-Fi, or USB through `adb reverse`.
 Protocol: [docs/deck.md in stance](https://github.com/H0dg4m/stance-hypr/blob/main/docs/deck.md), threat model: same page. Test vectors: `protocol/deck-vectors.json` (copied from stance's `tests/fixtures/`; CI checks they are identical).
 
+Protocol v2 (stance 0.6+): `hello` carries `proto` and `caps`; a v2 app answers once per connection with `caps` (this app offers none yet) and declines any stream `offer` with "unsupported". Binary data frames (`0x00`, sid u32 BE, payload) are decoded by the core but not used yet. An older PC without `proto` is handled exactly as before. See ADR 0003 and `docs/protocol.md` §3.7 in stance.
+
 - `core/`: plain JVM Kotlin (Noise IK + XXpsk3 on BouncyCastle, framing, messages, QR). No Android dependencies.
 - `app/`: Compose / Material 3 app, package `dev.stance.deck`, minSdk 26. QR scanning with CameraX + ZXing (no Google services). Pasting the code works as a fallback. Several PCs can be paired; the device key is per PC and wrapped by the Android Keystore. The pairing screen sets `FLAG_SECURE`. The connection lives only while a PC screen is visible.
 

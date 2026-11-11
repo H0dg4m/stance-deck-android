@@ -22,6 +22,17 @@
   },
   "pc_public_b64url": "2J47rXlDfb7Z-ENBgwT0YP8Fx_6B_kqVd6gEy5Nn_2Y",
   "phone_public_b64url": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+  "v2": {
+    "caps_json": "{\"t\":\"caps\",\"proto\":2,\"caps\":[\"clip.text\"]}",
+    "comment": "Protocol v2 (docs/adr/0003). data_frame = 0x00, sid u32 BE, payload. Its ciphertext continues the ik transport above: initiator nonce 1, after the ping.",
+    "data_frame": {
+      "ciphertext_hex": "3dd94e81ce6b0e77465c9814e959708c5b326e95bfaf55e9c289",
+      "payload": "hello",
+      "plaintext_hex": "000000000168656c6c6f",
+      "sid": 1
+    },
+    "offer_json": "{\"t\":\"offer\",\"sid\":1,\"kind\":\"clip.text\",\"size\":5,\"sha256\":\"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\"}"
+  },
   "xxpsk3": {
     "handshake_hash_hex": "5e69c43515458fc4e700ff7e680cd08e5ec7b1a2956640c3df5612c57db7a9de",
     "initiator_ephemeral_private_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",

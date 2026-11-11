@@ -122,6 +122,7 @@ class PcConnection(
     private suspend fun pump(s: Session): String {
         var lastPing = System.nanoTime()
         var lastSeen = System.nanoTime()
+        var capsSent = false
         while (currentCoroutineContext().isActive) {
             val m = try {
                 s.recv(500)
@@ -135,6 +136,11 @@ class PcConnection(
                 is ServerMsg.Hello -> {
                     _view.update { it.copy(hello = m, state = m.state, stateAtMs = now / 1_000_000) }
                     if (m.hosts.isNotEmpty()) onHosts(m.hosts, m.port)
+                    // v2: answer once per connection; the app offers no capability yet.
+                    if (m.proto >= 2 && !capsSent) {
+                        capsSent = true
+                        try { s.send(ClientMsg.Caps(PROTO, emptyList())) } catch (e: DeckException) { return e.message ?: "connection lost" }
+                    }
                 }
                 is ServerMsg.State -> _view.update {
                     val old = it.state
@@ -153,7 +159,11 @@ class PcConnection(
                     )
                 }
                 is ServerMsg.Bye -> return cleanText(m.reason, 80).ifEmpty { "the PC closed the connection" }
-                is ServerMsg.Pong, is ServerMsg.Unknown -> {}
+                // No capability is offered, so streams are declined and data is ignored.
+                is ServerMsg.Stream -> if (m.msg is StreamMsg.Offer) {
+                    try { s.send(ClientMsg.Stream(StreamMsg.Decline(m.msg.sid, "unsupported"))) } catch (e: DeckException) { return e.message ?: "connection lost" }
+                }
+                is ServerMsg.Pong, is ServerMsg.Unknown, is ServerMsg.Caps, is ServerMsg.Data -> {}
             }
             if (now - lastPing > 15_000_000_000L) {
                 lastPing = now

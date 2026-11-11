@@ -54,6 +54,13 @@ class Session internal constructor(
         synchronized(sendLock) { framing.write(transport.encrypt(plain)) }
     }
 
+    /** Sends one data frame (v2, only after the PC agreed to `caps`). */
+    fun sendData(sid: Long, payload: ByteArray) {
+        val plain = encodeDataFrame(sid, payload)
+        if (plain.size + 16 > POST_AUTH_MAX) throw DeckException("message too large")
+        synchronized(sendLock) { framing.write(transport.encrypt(plain)) }
+    }
+
     /** Next message, or null when [timeoutMs] passes with no data. */
     fun recv(timeoutMs: Int): ServerMsg? {
         socket?.soTimeout = timeoutMs
@@ -63,7 +70,7 @@ class Session internal constructor(
             return null
         }
         val plain = try { transport.decrypt(frame) } catch (e: NoiseException) { throw DeckException("decryption failed") }
-        return parseServerMsg(String(plain, Charsets.UTF_8))
+        return parsePlain(plain)
     }
 
     override fun close() {
