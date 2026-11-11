@@ -374,7 +374,8 @@ class PcConnectionTest {
             val topUp = h.scope.launch(Dispatchers.IO) {
                 while (isActive) {
                     val have = h.pc.data.sumOf { it.second.size.toLong() }
-                    if (have + 131072 > granted.get() && granted.get() < bytes.size) {
+                    // Only after the accept: a window for an unknown stream ends the session.
+                    if (granted.get() > 0 && have + 131072 > granted.get() && granted.get() < bytes.size) {
                         val more = minOf(262144L, bytes.size - granted.get())
                         granted.addAndGet(more)
                         h.pc.push("""{"t":"window","sid":1,"bytes":$more}""".toByteArray())
