@@ -167,7 +167,7 @@ class PcConnectionTest {
             val c = setup(pc, phone, scope)
             c.start()
             waitFor(what = "decline") { pc.received.any { it.contains("\"t\":\"decline\"") } }
-            assertEquals("""{"t":"caps","proto":2,"caps":["clip.text","file.push"]}""", pc.received.first())
+            assertEquals("""{"t":"caps","proto":2,"caps":["clip.text","clip.image","file.push"]}""", pc.received.first())
             assertEquals(1, pc.received.count { it.contains("\"t\":\"caps\"") })
             assertTrue(pc.received.any { it == """{"t":"decline","sid":2,"reason":"unsupported"}""" })
             assertEquals(Link.Connected, c.view.value.link)
@@ -199,6 +199,8 @@ class PcConnectionTest {
         val temps = java.util.concurrent.CopyOnWriteArrayList<java.io.File>()
         override val canSaveFiles get() = files
         override fun setClipboard(text: String) { clip.add(text) }
+        val images = java.util.concurrent.CopyOnWriteArrayList<Pair<String, ByteArray>>()
+        override fun setClipboardImage(bytes: ByteArray, mime: String) { images.add(mime to bytes) }
         override fun newTempFile(): java.io.File = java.io.File.createTempFile("stance-test", ".part").also { temps.add(it) }
         override fun saveDownload(temp: java.io.File, name: String): String { saved[name] = temp.readBytes(); return name }
     }
@@ -219,9 +221,9 @@ class PcConnectionTest {
 
     @Test fun capsFollowTheHostAndOldHostsDoNotOfferFilePull() {
         val h = Harness(FakeHost(false), emptyList())
-        h.use { h.c.start(); waitFor(what = "caps") { h.pc.received.isNotEmpty() }; assertEquals("""{"t":"caps","proto":2,"caps":["clip.text","file.push"]}""", h.pc.received[0]) }
+        h.use { h.c.start(); waitFor(what = "caps") { h.pc.received.isNotEmpty() }; assertEquals("""{"t":"caps","proto":2,"caps":["clip.text","clip.image","file.push"]}""", h.pc.received[0]) }
         val h2 = Harness(FakeHost(true), emptyList())
-        h2.use { h2.c.start(); waitFor(what = "caps") { h2.pc.received.isNotEmpty() }; assertEquals("""{"t":"caps","proto":2,"caps":["clip.text","file.push","file.pull"]}""", h2.pc.received[0]) }
+        h2.use { h2.c.start(); waitFor(what = "caps") { h2.pc.received.isNotEmpty() }; assertEquals("""{"t":"caps","proto":2,"caps":["clip.text","clip.image","file.push","file.pull"]}""", h2.pc.received[0]) }
     }
 
     @Test fun clipFromThePcIsAcceptedAndSetOnTheClipboard() {
@@ -416,6 +418,91 @@ class PcConnectionTest {
             h.c.sendFile(OutSource("huge.bin", 513L shl 20, null) { throw java.io.IOException() })
             waitFor(what = "event") { h.events.contains("The file is larger than 512 MiB") }
             assertTrue(h.pc.received.none { it.contains("offer") })
+        }
+    }
+
+    private val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A) + ByteArray(40) { it.toByte() }
+
+    private fun imageOffer(sid: Int, body: ByteArray, mime: String = "image/png") = listOf(
+        """{"t":"offer","sid":$sid,"kind":"clip.image","size":${body.size},"sha256":"${sha256Hex(body)}","mime":"$mime"}""".toByteArray(),
+        encodeDataFrame(sid.toLong(), body),
+        """{"t":"end","sid":$sid}""".toByteArray(),
+    )
+
+    @Test fun imageFromThePcIsSniffedAndSetOnTheClipboard() {
+        val host = FakeHost()
+        // The offered mime lies (text/plain): the content decides.
+        Harness(host, listOf("clip.image"), imageOffer(2, png, "text/plain")).use { h ->
+            h.c.start()
+            waitFor(what = "image") { host.images.isNotEmpty() }
+            assertEquals("image/png", host.images.single().first)
+            assertArrayEquals(png, host.images.single().second)
+            waitFor(what = "event") { h.events.contains("Image from Fake") }
+            assertTrue(h.pc.received.contains("""{"t":"done","sid":2,"ok":true}"""))
+        }
+    }
+
+    @Test fun imageOfAnUnknownTypeIsNotPutOnTheClipboard() {
+        val host = FakeHost()
+        Harness(host, listOf("clip.image"), imageOffer(2, "BM-not-an-allowed-image".toByteArray(), "image/png")).use { h ->
+            h.c.start()
+            waitFor(what = "event") { h.events.contains("The PC sent an image of an unknown type") }
+            assertTrue(host.images.isEmpty())
+        }
+    }
+
+    @Test fun oversizedImageOffersAreDeclined() {
+        val host = FakeHost()
+        val big = (33L shl 20)
+        Harness(host, listOf("clip.image"), listOf(
+            """{"t":"offer","sid":2,"kind":"clip.image","size":$big,"sha256":"$HELLO_SHA"}""".toByteArray(),
+        )).use { h ->
+            h.c.start()
+            waitFor(what = "decline") { h.pc.received.any { it.contains("\"t\":\"decline\"") } }
+            assertTrue(h.pc.received.any { it.startsWith("""{"t":"decline","sid":2,"reason":"too large"""") })
+            assertTrue(host.images.isEmpty())
+        }
+    }
+
+    @Test fun imageOfferWithoutTheAgreedCapabilityIsDeclined() {
+        Harness(FakeHost(), listOf("clip.text"), imageOffer(2, png)).use { h ->
+            h.c.start()
+            waitFor(what = "decline") { h.pc.received.any { it.contains("\"t\":\"decline\"") } }
+            assertTrue(h.pc.received.any { it.startsWith("""{"t":"decline","sid":2,"reason":"unsupported"""") })
+        }
+    }
+
+    @Test fun imageToThePcIsSniffedOfferedAndSent() {
+        Harness(FakeHost(), listOf("clip.image"), pcSetup = accepting { _, _ -> """{"t":"accept","sid":SID,"window":SIZE}""" }).use { h ->
+            h.c.start()
+            waitFor(what = "agreed") { h.c.view.value.caps == listOf("clip.image") }
+            h.c.sendClipImage(OutSource("x", png.size.toLong(), "text/plain") { java.io.ByteArrayInputStream(png) })
+            waitFor(what = "result") { h.events.contains("Image sent") }
+            assertTrue(h.pc.received.any { it.startsWith("""{"t":"offer","sid":1,"kind":"clip.image","size":${png.size},"sha256":"${sha256Hex(png)}"""") && it.contains("\"mime\":\"image/png\"") })
+            assertArrayEquals(png, h.pc.data.single().second)
+        }
+    }
+
+    @Test fun imageToThePcRefusesNonImagesAndHugeSourcesWithoutAnOffer() {
+        Harness(FakeHost(), listOf("clip.image")).use { h ->
+            h.c.start()
+            waitFor(what = "agreed") { h.c.view.value.caps.isNotEmpty() }
+            val n = h.pc.received.size
+            h.c.sendClipImage(OutSource("x", 10, null) { java.io.ByteArrayInputStream("not an image".toByteArray()) })
+            waitFor(what = "event") { h.events.contains("Only PNG, JPEG, WebP and GIF images can be sent") }
+            h.c.sendClipImage(OutSource("x", 33L shl 20, null) { throw java.io.IOException("never read") })
+            waitFor(what = "event2") { h.events.contains("The image is too large (32 MiB at most)") }
+            Thread.sleep(300)
+            assertEquals(n, h.pc.received.size)
+        }
+    }
+
+    @Test fun imageToThePcWithoutTheCapabilityTellsTheUser() {
+        Harness(FakeHost(), listOf("clip.text")).use { h ->
+            h.c.start()
+            waitFor(what = "agreed") { h.c.view.value.caps.isNotEmpty() }
+            h.c.sendClipImage(OutSource("x", png.size.toLong(), null) { java.io.ByteArrayInputStream(png) })
+            waitFor(what = "event") { h.events.contains("Clipboard images are off on the PC") }
         }
     }
 }

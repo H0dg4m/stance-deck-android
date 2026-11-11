@@ -33,6 +33,8 @@ interface TransferHost {
     /** False where files cannot be saved to the public Downloads (Android 9 and older): `file.pull` is not offered. */
     val canSaveFiles: Boolean
     fun setClipboard(text: String)
+    /** Puts a (sniffed, size-checked) image on the clipboard; [mime] comes from the content. */
+    fun setClipboardImage(bytes: ByteArray, mime: String) {}
     fun newTempFile(): File
     /** Copies [temp] into the public Downloads under [name]; returns where it went. */
     fun saveDownload(temp: File, name: String): String
@@ -59,6 +61,7 @@ data class OutState(val name: String, val size: Long, val phase: Phase, val sent
 }
 
 const val CAP_CLIP = "clip.text"
+const val CAP_IMAGE = "clip.image"
 const val CAP_PUSH = "file.push"
 const val CAP_PULL = "file.pull"
 
@@ -183,7 +186,7 @@ class PcConnection(
         var out: OutputStream? = null
 
         fun write(host: TransferHost, b: ByteArray) {
-            if (kind == CAP_CLIP) {
+            if (kind == CAP_CLIP || kind == CAP_IMAGE) {
                 (mem ?: ByteArrayOutputStream().also { mem = it }).write(b)
             } else {
                 val o = out ?: host.newTempFile().also { file = it }.outputStream().also { out = it }
@@ -205,6 +208,29 @@ class PcConnection(
         if (bytes.isEmpty() || text.isBlank()) { _events.tryEmit("The clipboard is empty"); return }
         if (bytes.size > CLIP_TEXT_MAX) { _events.tryEmit("Clipboard text is too large (1 MiB at most)"); return }
         cmds.add(Cmd.Offer(OutJob(CAP_CLIP, null, bytes.size.toLong(), sha256Hex(bytes), "text/plain") { ByteArrayInputStream(bytes) }))
+    }
+
+    /**
+     * An image to the PC clipboard (`clip.image`), read from [src] now (call on the button press only).
+     * At most 32 MiB; the type is sniffed from the bytes (PNG, JPEG, WebP, GIF).
+     */
+    fun sendClipImage(src: OutSource) {
+        if (!canSend(CAP_IMAGE, "Clipboard images are off on the PC")) return
+        if (src.size > IMAGE_MAX) { _events.tryEmit("The image is too large (32 MiB at most)"); return }
+        scope.launch(Dispatchers.IO) {
+            val bytes = try {
+                src.open().use { it.readNBytes(IMAGE_MAX.toInt() + 1) }
+            } catch (e: Exception) { _events.tryEmit("Cannot read the image"); return@launch }
+            when {
+                bytes.isEmpty() -> _events.tryEmit("The clipboard image is empty")
+                bytes.size > IMAGE_MAX -> _events.tryEmit("The image is too large (32 MiB at most)")
+                else -> {
+                    val mime = sniffImage(bytes)
+                    if (mime == null) _events.tryEmit("Only PNG, JPEG, WebP and GIF images can be sent")
+                    else cmds.add(Cmd.Offer(OutJob(CAP_IMAGE, null, bytes.size.toLong(), sha256Hex(bytes), mime) { ByteArrayInputStream(bytes) }))
+                }
+            }
+        }
     }
 
     /** A file to the PC (`file.push`); the PC user has to accept it there. */
@@ -263,6 +289,8 @@ class PcConnection(
             val outs = streams.onMsg(msg, nowMs()) { kind, size, name ->
                 when {
                     kind == CAP_CLIP -> { meta = Incoming(kind, size, null); Decision.Accept }
+                    kind == CAP_IMAGE && size <= IMAGE_MAX -> { meta = Incoming(kind, size, null); Decision.Accept }
+                    kind == CAP_IMAGE -> Decision.Decline("too large")
                     kind == CAP_PULL && host.canSaveFiles -> { meta = Incoming(kind, size, cleanFileName(name ?: "file")); Decision.Defer }
                     else -> Decision.Decline("unsupported")
                 }
@@ -278,7 +306,7 @@ class PcConnection(
                 run != null && msg is StreamMsg.Accept -> setSending(run, 0)
                 run != null && msg is StreamMsg.Decline -> result(msg.sid, false, declineMessage(run.job.kind, msg.reason))
                 run != null && msg is StreamMsg.Done ->
-                    if (msg.ok) result(msg.sid, true, if (run.job.kind == CAP_CLIP) "Clipboard sent" else "Sent ${run.job.name}")
+                    if (msg.ok) result(msg.sid, true, when (run.job.kind) { CAP_CLIP -> "Clipboard sent"; CAP_IMAGE -> "Image sent"; else -> "Sent ${run.job.name}" })
                     else result(msg.sid, false, "Failed: " + cleanText(msg.error ?: "unknown error", 80))
                 run != null && msg is StreamMsg.Cancel -> result(msg.sid, false, "Cancelled by the PC: " + cleanText(msg.reason, 60))
             }
@@ -310,10 +338,24 @@ class PcConnection(
             inc.closeStream()
             if (!ok) {
                 inc.discard()
-                _events.tryEmit(if (kind == CAP_PULL) "Receiving ${inc.name} failed" else "Clipboard from the PC failed")
+                _events.tryEmit(if (kind == CAP_PULL) "Receiving ${inc.name} failed" else if (kind == CAP_IMAGE) "Image from the PC failed" else "Clipboard from the PC failed")
                 return
             }
-            if (kind == CAP_CLIP) {
+            if (kind == CAP_IMAGE) {
+                val bytes = inc.mem?.toByteArray() ?: ByteArray(0)
+                // The content decides the type, never the offered mime.
+                val mime = sniffImage(bytes)
+                if (mime == null) { _events.tryEmit("The PC sent an image of an unknown type"); return }
+                val name = cleanText(pc.name).ifEmpty { "PC" }
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        host.setClipboardImage(bytes, mime)
+                        _events.tryEmit("Image from $name")
+                    } catch (e: Exception) {
+                        _events.tryEmit("Could not set the image: " + cleanText(e.message ?: "error", 60))
+                    }
+                }
+            } else if (kind == CAP_CLIP) {
                 val bytes = inc.mem?.toByteArray() ?: ByteArray(0)
                 val text = try {
                     Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
@@ -359,7 +401,7 @@ class PcConnection(
                             streams.offer(j.kind, j.size, j.sha, j.name, j.mime, nowMs())
                         } catch (e: DeckException) {
                             val m = when (e.message) {
-                                "not negotiated" -> if (j.kind == CAP_CLIP) "Clipboard sharing is off on the PC" else "Receiving files is off on the PC"
+                                "not negotiated" -> when (j.kind) { CAP_CLIP -> "Clipboard sharing is off on the PC"; CAP_IMAGE -> "Clipboard images are off on the PC"; else -> "Receiving files is off on the PC" }
                                 "busy" -> "Another transfer is still running"
                                 else -> "Cannot send: " + cleanText(e.message ?: "", 60)
                             }
@@ -458,7 +500,7 @@ class PcConnection(
                         // v2: answer once per connection with the capabilities this app supports.
                         if (m.proto >= 2 && !capsSent) {
                             capsSent = true
-                            val want = listOf(CAP_CLIP, CAP_PUSH) + if (host.canSaveFiles) listOf(CAP_PULL) else emptyList()
+                            val want = listOf(CAP_CLIP, CAP_IMAGE, CAP_PUSH) + if (host.canSaveFiles) listOf(CAP_PULL) else emptyList()
                             s.send(ClientMsg.Caps(PROTO, want))
                         }
                     }

@@ -32,5 +32,13 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+        <!-- Clipboard images from the PC: content Uris for the cache's clip/ folder only, never exported. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.clipfiles"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/clip_paths" />
+        </provider>
     </application>
 </manifest>

@@ -290,8 +290,12 @@ fun PcScreen(vm: DeckViewModel, pcPublic: String) {
             // The clipboard is read only here, on the button press.
             onSendClip = {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
-                c?.sendClip(text)
+                val imageUri = cm.primaryClip?.takeIf { it.itemCount > 0 && cm.primaryClipDescription?.hasMimeType("image/*") == true }?.getItemAt(0)?.uri
+                val image = imageUri?.let { sourceFromUri(ctx, it) }
+                if (image != null) c?.sendClipImage(image) else {
+                    val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
+                    c?.sendClip(text)
+                }
             },
             onSendFile = { picker.launch(arrayOf("*/*")) },
             onAnswer = { sid, ok -> c?.answer(sid, ok) },

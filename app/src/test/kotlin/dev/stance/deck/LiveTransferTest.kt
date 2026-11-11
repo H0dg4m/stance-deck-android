@@ -41,11 +41,12 @@ class LiveTransferTest {
             return pb
         }
 
-        fun stance(vararg args: String, stdin: String? = null, env: Map<String, String> = emptyMap()): String {
+        fun stance(vararg args: String, stdin: String? = null, env: Map<String, String> = emptyMap(), stdinFile: File? = null): String {
             val pb = builder(*args).redirectErrorStream(true)
             pb.environment().putAll(env)
+            if (stdinFile != null) pb.redirectInput(stdinFile)
             val p = pb.start()
-            if (stdin != null) p.outputStream.use { it.write(stdin.toByteArray()) } else p.outputStream.close()
+            if (stdinFile != null) {} else if (stdin != null) p.outputStream.use { it.write(stdin.toByteArray()) } else p.outputStream.close()
             val out = p.inputStream.bufferedReader().readText()
             p.waitFor(20, TimeUnit.SECONDS)
             return out
@@ -60,8 +61,13 @@ class LiveTransferTest {
         }
     }
 
+    /** A small valid-looking PNG (signature + marker byte so each direction differs). */
+    private fun png(marker: Int) = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A) + ByteArray(2000) { (it + marker).toByte() }
+
     private class FakeHost : TransferHost {
         val clip = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val images = java.util.concurrent.CopyOnWriteArrayList<Pair<String, ByteArray>>()
+        override fun setClipboardImage(bytes: ByteArray, mime: String) { images.add(mime to bytes) }
         val saved = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
         override val canSaveFiles = true
         override fun setClipboard(text: String) { clip.add(text) }
@@ -91,7 +97,7 @@ class LiveTransferTest {
         try {
             waitFor(what = "server (${synchronized(log) { log }})") { synchronized(log) { log.contains("listening on") } && File(dir, "r/stance/deck.sock").exists() }
             env.stance("deck", "transfer", "put", "--data",
-                """{"clip_to_phone":true,"clip_from_phone":"notify","files_from_phone":"ask","download_dir":"${env.dl.path}"}""")
+                """{"clip_to_phone":true,"clip_from_phone":"notify","clip_images":true,"files_from_phone":"ask","download_dir":"${env.dl.path}"}""")
             env.stance("clip", "config", "put", "--data", """{"enabled":true}""")
 
             val qr = parseQr(Json.parseToJsonElement(env.stance("deck", "pair", "--json")).jsonObject["data"]!!.jsonObject["payload"]!!.jsonPrimitive.content)
@@ -103,7 +109,7 @@ class LiveTransferTest {
             val events = java.util.concurrent.CopyOnWriteArrayList<String>()
             scope.launch(start = CoroutineStart.UNDISPATCHED) { c.events.collect { events.add(it) } }
             c.start()
-            waitFor(what = "all capabilities") { c.view.value.caps.toSet() == setOf(CAP_CLIP, CAP_PUSH, CAP_PULL) }
+            waitFor(what = "all capabilities") { c.view.value.caps.toSet() == setOf(CAP_CLIP, CAP_IMAGE, CAP_PUSH, CAP_PULL) }
 
             // clip to the PC
             c.sendClip("from android ä€")
@@ -144,6 +150,21 @@ class LiveTransferTest {
             env.stance("clip", "ingest", stdin = "from the pc", env = mapOf("CLIPBOARD_STATE" to "data"))
             waitFor(what = "clip from the PC") { host.clip.contains("from the pc") }
             assertTrue(events.contains("Clipboard from Live PC"))
+
+            // image to the PC (stored by the fake wl-copy as the clipboard content)
+            val pngUp = png(1)
+            c.sendClipImage(OutSource("x", pngUp.size.toLong(), "text/plain") { ByteArrayInputStream(pngUp) })
+            waitFor(what = "image sent") { events.contains("Image sent") }
+            waitFor(what = "wl-copy image") { clipboard.exists() && clipboard.readBytes().contentEquals(pngUp) }
+
+            // image from the PC: a different image (the PC does not echo the phone's own back within 30 s)
+            val pngDown = png(2)
+            val img = File(dir, "down.png").apply { writeBytes(pngDown) }
+            env.stance("clip", "ingest", "--image", stdin = null, env = mapOf("CLIPBOARD_STATE" to "data"), stdinFile = img)
+            waitFor(what = "image from the PC") { host.images.isNotEmpty() }
+            assertEquals("image/png", host.images.single().first)
+            assertArrayEquals(pngDown, host.images.single().second)
+            assertTrue(events.contains("Image from Live PC"))
         } finally {
             conn?.stop()
             scope.cancel()

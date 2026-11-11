@@ -13,6 +13,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.IOException
 
@@ -30,6 +31,20 @@ class AndroidHost(private val app: Application) : TransferHost {
         Handler(Looper.getMainLooper()).post {
             val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             runCatching { cm.setPrimaryClip(ClipData.newPlainText("stance", text)) }
+        }
+    }
+
+    /** Image from the PC: a private cache file, put on the clipboard as a content Uri (FileProvider, cache path only). Only the latest is kept (not swept at start: the clipboard may still point at it). */
+    override fun setClipboardImage(bytes: ByteArray, mime: String) {
+        val clipDir = File(app.cacheDir, "clip").apply { mkdirs() }
+        clipDir.listFiles()?.forEach { it.delete() }
+        val ext = when (mime) { "image/png" -> "png"; "image/jpeg" -> "jpg"; "image/webp" -> "webp"; "image/gif" -> "gif"; else -> throw IOException("unsupported type") }
+        val f = File(clipDir, "clip-${System.currentTimeMillis()}.$ext")
+        f.writeBytes(bytes)
+        val uri = FileProvider.getUriForFile(app, app.packageName + ".clipfiles", f)
+        Handler(Looper.getMainLooper()).post {
+            val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            runCatching { cm.setPrimaryClip(ClipData.newUri(app.contentResolver, "stance image", uri)) }
         }
     }
 
