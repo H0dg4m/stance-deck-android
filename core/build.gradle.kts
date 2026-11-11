@@ -18,7 +18,7 @@ tasks.test {
     useJUnitPlatform()
     // Live interop tests need a built `stance` binary; see LiveInteropTest.
     systemProperty("stance.binary", System.getProperty("stance.binary") ?: System.getenv("STANCE_BIN") ?: "")
-    systemProperty("stance.vectors", rootDir.resolve("../tests/fixtures/deck-vectors.json").absolutePath)
+    systemProperty("stance.vectors", (System.getenv("STANCE_VECTORS") ?: rootDir.resolve("protocol/deck-vectors.json").absolutePath))
     testLogging { events("passed", "failed", "skipped"); showStandardStreams = false }
 }
 java { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

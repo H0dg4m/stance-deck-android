@@ -1,0 +1,23 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    # Noise/protocol core against the shared test vectors and a real
+    # `stance deck serve` built from the stance repository; app screens and
+    # reconnect logic under Robolectric.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: H0dg4m/stance-hypr
+          path: stance-hypr
+      - name: Vectors match stance
+        run: cmp protocol/deck-vectors.json stance-hypr/tests/fixtures/deck-vectors.json
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --manifest-path stance-hypr/Cargo.toml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: ./gradlew :core:test :app:testDebugUnitTest -Dstance.binary=$GITHUB_WORKSPACE/stance-hypr/target/debug/stance

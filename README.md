@@ -1,20 +1,22 @@
 # Stance Deck (Android)
 
+Phone remote for [stance](https://github.com/H0dg4m/stance-hypr), the bar-first display tool for Hyprland.
+This repository is the Android app; the PC side (`stance deck serve`) lives in the stance repository.
+
 Phone side of the stance deck: scan the PC's pairing QR, then press the buttons
 from `~/.config/stance/deck.toml`. Wi-Fi, or USB through `adb reverse`.
-Protocol: [../docs/protocol.md](../docs/protocol.md), threat model: [../docs/deck.md](../docs/deck.md).
+Protocol: [docs/deck.md in stance](https://github.com/H0dg4m/stance-hypr/blob/main/docs/deck.md), threat model: same page. Test vectors: `protocol/deck-vectors.json` (copied from stance's `tests/fixtures/`; CI checks they are identical).
 
 - `core/`: plain JVM Kotlin (Noise IK + XXpsk3 on BouncyCastle, framing, messages, QR). No Android dependencies.
 - `app/`: Compose / Material 3 app, package `dev.stance.deck`, minSdk 26. QR scanning with CameraX + ZXing (no Google services). Pasting the code works as a fallback. Several PCs can be paired; the device key is per PC and wrapped by the Android Keystore. The pairing screen sets `FLAG_SECURE`. The connection lives only while a PC screen is visible.
 
 ## Build from source
 
-Needs JDK 21 and the Android SDK (platform 37.0, build-tools 35.0.0). Put `sdk.dir=/path/to/sdk` into `android/local.properties`.
+Needs JDK 21 and the Android SDK (platform 37.0, build-tools 35.0.0). Put `sdk.dir=/path/to/sdk` into `local.properties`.
 
 ```
-cd android
 ./gradlew :core:test                                   # vectors + unit tests
-./gradlew :core:test -Dstance.binary=../target/debug/stance   # + live interop against a real `stance deck serve`
+./gradlew :core:test -Dstance.binary=/path/to/stance   # + live interop against a real `stance deck serve`
 ./gradlew :app:assembleDebug                           # app/build/outputs/apk/debug/app-debug.apk
 ```
 
